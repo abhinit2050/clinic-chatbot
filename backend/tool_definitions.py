@@ -66,4 +66,4 @@ tools = [
             "required": ["doctor_id", "slot_id", "name", "phone", "date"]
         }
     }
-]
+]       
