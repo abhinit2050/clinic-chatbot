@@ -1,0 +1,28 @@
+.input-box {
+  display: flex;
+  padding: 16px;
+  gap: 8px;
+  background-color: var(--color-input-bg);
+  border-top: 1px solid #e5e7eb;
+}
+
+.input-box input {
+  flex: 1;
+  padding: 12px 16px;
+  border: 1px solid #e5e7eb;
+  border-radius: var(--border-radius);
+  font-size: var(--font-md);
+  background-color: var(--color-bg);
+  color: var(--color-text);
+  outline: none;
+}
+
+.input-box button {
+  padding: 12px 24px;
+  background-color: var(--color-primary);
+  color: #ffffff;
+  border: none;
+  border-radius: var(--border-radius);
+  font-size: var(--font-md);
+  cursor: pointer;
+}

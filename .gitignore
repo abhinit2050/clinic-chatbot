@@ -1,2 +1,14 @@
 misc
 .env
+.DS_Store
+
+# Python
+venv/
+__pycache__/
+*.pyc
+clinic.db
+.env
+
+# Node
+node_modules/
+dist/

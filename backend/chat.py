@@ -30,7 +30,7 @@ def chat(conversation_history):
         )
 
         output = response.output
-
+        print("Output:", output)    
         for item in output:
             if item.type=="message":
                 return item.content[0].text
@@ -45,8 +45,12 @@ def chat(conversation_history):
                 elif tool_name == "book_appointment":
                     tool_result = book_appointment(**tool_args)
 
-                messages.append({"role":"assistant", "content":output})
-
+                messages.append({
+                    "type": "function_call",
+                    "call_id": item.call_id,
+                    "name": item.name,
+                    "arguments": item.arguments
+                })
                 messages.append({
                     "type":"function_call_output",
                     "call_id":item.call_id, 
@@ -58,6 +62,6 @@ def chat(conversation_history):
     # if __name__ == "__main__":
     #     history = [{"role": "user", "content": "Hello, which doctors are available?"}]
     #     response = chat(history)
-    #     print("Response:", response)
+    #     print("Response:", response)  
 
 
