@@ -4,15 +4,19 @@ from openai import OpenAI
 from dotenv import load_dotenv
 from tools import list_doctors, check_availability, book_appointment
 from tool_definitions import tools
+from datetime import date
 
 load_dotenv()
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 def chat(conversation_history):
-    system_prompt=""" 
+    
+    today = date.today().strftime("%Y-%m-%d")
+    print("Today's date:", today);
+    system_prompt=f""" 
     You are a helpful clinic appointment assistant. You help patients book appointments with doctors.
-
+    Today's date is {today}. Use this as reference when the user says "today", "tomorrow", or any relative date.
     You have access to the following tools:
     - list_doctors: use this when the user asks about available doctors
     - check_availability: use this when the user has chosen a doctor and a date

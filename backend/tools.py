@@ -10,6 +10,7 @@ def list_doctors():
     return [{"id":row["id"],"name":row["name"],"specialty":row["specialty"]} for row in doctors]
 
 def check_availability(doctor_id, date):
+    print("check availability called"+" doctor_id:",doctor_id," date:",date);
     conn = get_connection()
     cursor = conn.cursor()
 
@@ -25,6 +26,7 @@ def check_availability(doctor_id, date):
     for row in slots:
         results.append({"slot_id":row["id"],"time":row["time"]})
     
+    print("slots available:", results)
     return results  
 
 def book_appointment(name, phone, reason, doctor_id,date, slot_id):
