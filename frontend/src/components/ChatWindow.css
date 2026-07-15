@@ -27,3 +27,9 @@
     color: var(--color-text);
     align-self: flex-start;
 }
+
+.message-bubble.error {
+  color: #ef4444;
+  border: 1px solid #ef4444;
+  background-color: #fef2f2;
+}

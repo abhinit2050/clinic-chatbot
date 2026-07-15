@@ -29,6 +29,11 @@ function App() {
     setConversatoinHistory([...newHistory,{role:"assistant",content:data.response}])
     }catch(err){
       console.error("Error sending message:", err);
+      const newHistory = [...conversationHistory,{role:"assistant", 
+        content:"Sorry, there was an error processing your request. Please try again later.",
+      isError: true 
+      }]
+      setConversatoinHistory(newHistory);
     } finally {
       setIsLoading(false)
     }

@@ -15,7 +15,7 @@
         {conversationHistory?.map((message, index) => (
             <div
             key={index}
-            className={`message-bubble ${message.role === "user" ? "user" : "bot"}`}
+            className={`message-bubble ${message.role === "user" ? "user" : "bot"} ${message.isError ? "error" : ""}`}
             >
             {message.content}
             </div>
