@@ -1,5 +1,7 @@
 from database import get_connection
 
+
+
 def list_doctors():
     conn=get_connection()
     cursor=conn.cursor()
@@ -33,6 +35,8 @@ def book_appointment(name, phone, reason, doctor_id,date, slot_id):
     # check if patient exists and add if they don't
     conn = get_connection()
     cursor = conn.cursor()
+
+    print("Booking appointment with doc "+str(doctor_id)+" for patient "+name+" on date and slot id "+str(date)+" "+str(slot_id))
 
     cursor.execute("SELECT * from patients WHERE phone=?",(phone,))
     patient = cursor.fetchone()

@@ -3,14 +3,15 @@ from pydantic import BaseModel
 from chat import chat
 
 class ChatRequest(BaseModel):
-    conversation_history: list
+    session_id:str
+    message:str
 
 
 router = APIRouter()
 
 @router.post("/chat")
 def chat_endpoint(request: ChatRequest):
-    response = chat(request.conversation_history)
+    response = chat(request.session_id, request.message)
     return {"response":response}
 
 

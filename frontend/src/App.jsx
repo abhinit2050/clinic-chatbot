@@ -1,5 +1,5 @@
 
-import {useState, useEffect} from "react"
+import {useState, useEffect, useRef} from "react"
 import ChatWindow from "./components/ChatWindow"
 import InputBar from "./components/InputBar"
 import "./App.css"
@@ -10,6 +10,8 @@ function App() {
   const [isDark, setIsDark] = useState(false);
   const [conversationHistory, setConversatoinHistory] = useState([])
   const [isLoading, setIsLoading] = useState(false);
+
+  const sessionId = useRef(crypto.randomUUID())
 
   async function handleSend(userMessage){
     console.log("user message", userMessage);
@@ -22,11 +24,12 @@ function App() {
     const res = await fetch("http://127.0.0.1:8000/chat",{
       method:"POST",
       headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({conversation_history:newHistory})
+      body:JSON.stringify({"session_id":sessionId.current, "message":userMessage})
     })
 
     const data = await res.json();
     setConversatoinHistory([...newHistory,{role:"assistant",content:data.response}])
+
     }catch(err){
       console.error("Error sending message:", err);
       const newHistory = [...conversationHistory,{role:"assistant", 

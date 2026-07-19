@@ -10,7 +10,17 @@ load_dotenv()
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-def chat(conversation_history):
+conversation_store = {}
+
+def chat(session_id, user_message):
+
+    if session_id not in conversation_store:
+        conversation_store[session_id] = []
+    
+    conversation_store[session_id].append({
+        "role":"user",
+        "content":user_message
+    })
     
     today = date.today().strftime("%Y-%m-%d")
     print("Today's date:", today);
@@ -24,7 +34,7 @@ def chat(conversation_history):
 
     Always be polite and conversational. If the user hasn't provided all necessary information, ask for it one piece at a time. Never make up doctor names or available slots - always use the tools to fetch real data.
     """
-    messages = [{"role":"system","content":system_prompt}]+conversation_history  
+    messages = [{"role":"system","content":system_prompt}]+conversation_store[session_id]  
 
     while True:
         response = client.responses.create(
@@ -37,7 +47,12 @@ def chat(conversation_history):
         print("Output:", output)    
         for item in output:
             if item.type=="message":
-                return item.content[0].text
+                reply = item.content[0].text
+                conversation_store[session_id].append({
+                    "role":"assistant",
+                    "content":reply
+                })
+                return reply
             elif item.type=="function_call":
                 tool_name = item.name
                 tool_args = json.loads(item.arguments)
@@ -59,13 +74,6 @@ def chat(conversation_history):
                     "type":"function_call_output",
                     "call_id":item.call_id, 
                     "output":json.dumps(tool_result)
-                })
-
-
-
-    # if __name__ == "__main__":
-    #     history = [{"role": "user", "content": "Hello, which doctors are available?"}]
-    #     response = chat(history)
-    #     print("Response:", response)  
+                })  
 
 
