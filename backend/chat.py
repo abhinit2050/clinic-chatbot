@@ -18,13 +18,12 @@ def chat(session_id, user_message):
         conversation_store[session_id] = []
     
     conversation_store[session_id].append({
-        "role":"user",
-        "content":user_message
+        "role": "user",
+        "content": user_message
     })
     
     today = date.today().strftime("%Y-%m-%d")
-    print("Today's date:", today);
-    system_prompt=f""" 
+    system_prompt = f""" 
     You are a helpful clinic appointment assistant. You help patients book appointments with doctors.
     Today's date is {today}. Use this as reference when the user says "today", "tomorrow", or any relative date.
     You have access to the following tools:
@@ -34,7 +33,7 @@ def chat(session_id, user_message):
 
     Always be polite and conversational. If the user hasn't provided all necessary information, ask for it one piece at a time. Never make up doctor names or available slots - always use the tools to fetch real data.
     """
-    messages = [{"role":"system","content":system_prompt}]+conversation_store[session_id]  
+    messages = [{"role": "system", "content": system_prompt}] + conversation_store[session_id]
 
     while True:
         response = client.responses.create(
@@ -44,25 +43,37 @@ def chat(session_id, user_message):
         )
 
         output = response.output
-        print("Output:", output)    
         for item in output:
-            if item.type=="message":
+            if item.type == "message":
                 reply = item.content[0].text
                 conversation_store[session_id].append({
-                    "role":"assistant",
-                    "content":reply
+                    "role": "assistant",
+                    "content": reply
                 })
                 return reply
-            elif item.type=="function_call":
+            elif item.type == "function_call":
                 tool_name = item.name
                 tool_args = json.loads(item.arguments)
 
-                if(tool_name=="list_doctors"):
+                if tool_name == "list_doctors":
                     tool_result = list_doctors()
-                elif tool_name=="check_availability":
+                elif tool_name == "check_availability":
                     tool_result = check_availability(**tool_args)
                 elif tool_name == "book_appointment":
                     tool_result = book_appointment(**tool_args)
+                    messages.append({
+                        "type": "function_call",
+                        "call_id": item.call_id,
+                        "name": item.name,
+                        "arguments": item.arguments
+                    })
+                    messages.append({
+                        "type": "function_call_output",
+                        "call_id": item.call_id,
+                        "output": json.dumps(tool_result)
+                    })
+                    summarize_conversation(session_id, messages)
+                    continue
 
                 messages.append({
                     "type": "function_call",
@@ -71,9 +82,26 @@ def chat(session_id, user_message):
                     "arguments": item.arguments
                 })
                 messages.append({
-                    "type":"function_call_output",
-                    "call_id":item.call_id, 
-                    "output":json.dumps(tool_result)
-                })  
+                    "type": "function_call_output",
+                    "call_id": item.call_id,
+                    "output": json.dumps(tool_result)
+                })
 
 
+def summarize_conversation(session_id, messages):
+    summ_prompt = "Summarize this entire appointment booking session in a few sentences."
+    messages.append({
+        "role": "user",
+        "content": summ_prompt
+    })
+
+    summary = client.responses.create(
+        model="gpt-4o",
+        input=messages
+    )
+
+    summary_text = summary.output[0].content[0].text
+    conversation_store[session_id] = [{
+        "role": "assistant",
+        "content": summary_text
+    }]
