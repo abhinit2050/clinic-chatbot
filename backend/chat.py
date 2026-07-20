@@ -30,6 +30,9 @@ def chat(session_id, user_message):
     - list_doctors: use this when the user asks about available doctors
     - check_availability: use this when the user has chosen a doctor and a date
     - book_appointment: use this when the user has confirmed the doctor, date, time slot, and provided their name and phone number
+    - Always use the exact doctor id and slot id returned by the tools. Never guess or make up ids.
+    - Always call list_doctors first before check_availability to get the correct doctor ids. Never assume a doctor's id.
+    - After the booking is complete, present a confirmation message to the user with the doctor's name, date and time of the appointment. Do not include any ids in the confirmation message.
 
     Always be polite and conversational. If the user hasn't provided all necessary information, ask for it one piece at a time. Never make up doctor names or available slots - always use the tools to fetch real data.
     """
@@ -57,8 +60,16 @@ def chat(session_id, user_message):
 
                 if tool_name == "list_doctors":
                     tool_result = list_doctors()
+                    conversation_store[session_id].append({
+                        "role": "assistant",
+                        "content": f"Available doctors: {json.dumps(tool_result)}"
+                    })
                 elif tool_name == "check_availability":
                     tool_result = check_availability(**tool_args)
+                    conversation_store[session_id].append({
+                        "role": "assistant",
+                        "content": f"Available slots: {json.dumps(tool_result)}"
+                    })
                 elif tool_name == "book_appointment":
                     tool_result = book_appointment(**tool_args)
                     messages.append({
@@ -73,7 +84,7 @@ def chat(session_id, user_message):
                         "output": json.dumps(tool_result)
                     })
                     summarize_conversation(session_id, messages)
-                    continue
+                    return "Your appointment was booked successfully!"
 
                 messages.append({
                     "type": "function_call",

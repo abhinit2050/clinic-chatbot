@@ -3,6 +3,7 @@ from database import get_connection
 
 
 def list_doctors():
+    print("list of doctors callled!")
     conn=get_connection()
     cursor=conn.cursor()
 
