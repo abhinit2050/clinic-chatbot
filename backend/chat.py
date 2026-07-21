@@ -46,8 +46,11 @@ def chat(session_id, user_message):
         )
 
         output = response.output
+
+        has_tool_call = any(item.type == "function_call" for item in output)
+
         for item in output:
-            if item.type == "message":
+            if item.type == "message" and not has_tool_call:
                 reply = item.content[0].text
                 conversation_store[session_id].append({
                     "role": "assistant",
