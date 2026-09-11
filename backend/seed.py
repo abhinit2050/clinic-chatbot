@@ -40,9 +40,10 @@ def seed_patients(cursor):
     for _ in range(10):
         name = fake.name()
         phone = fake.phone_number()
+        email = fake.email()
         cursor.execute("""
-            INSERT INTO patients (name, phone) VALUES (?, ?)
-        """, (name, phone))
+            INSERT INTO patients (name, phone, email) VALUES (?, ?, ?)
+        """, (name, phone, email))
 
 def seed():
     conn = get_connection()

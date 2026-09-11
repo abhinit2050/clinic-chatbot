@@ -11,7 +11,7 @@ router = APIRouter()
 
 @router.post("/chat")
 def chat_endpoint(request: ChatRequest):
-    response = chat(request.session_id, request.message)
-    return {"response":response}
+    result = chat(request.session_id, request.message)
+    return {"response": result["reply"], "awaiting_patient_form": result["awaiting_patient_form"]}
 
 
