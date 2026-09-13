@@ -3,47 +3,20 @@
 # Two different things in this app need to email a patient: the scheduled
 # reminder job (reminders.py, fires on a timer) and a booking confirmation
 # (tools.py, fires synchronously the moment book_appointment succeeds). Both
-# need identical SMTP plumbing (connect, STARTTLS, login, send) — this file is
-# the one place that plumbing lives, so reminders.py and tools.py each stay
+# go through send_email() below, so reminders.py and tools.py each stay
 # focused on *when* to send an email, not *how*.
-import os
-import smtplib
-import socket
-from email.mime.text import MIMEText
-
-_original_getaddrinfo = socket.getaddrinfo
-
-
-def _ipv4_only_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
-    # Some hosts (Render's outbound network, notably) have no working IPv6
-    # route, but Gmail's SMTP server publishes both A and AAAA records —
-    # smtplib can pick the IPv6 address first and fail immediately with
-    # "Network is unreachable" instead of falling back to IPv4. Restricting
-    # resolution to AF_INET for the duration of the SMTP connection sidesteps
-    # that, without touching the hostname smtplib uses for TLS verification.
-    return _original_getaddrinfo(host, port, socket.AF_INET, type, proto, flags)
+#
+# Actual sending is disabled for the hosted demo: Render's outbound network
+# blocks SMTP entirely (ports 25, 465, and 587 all fail with "Network is
+# unreachable" — confirmed via a diagnostic connectivity check), which is a
+# common anti-abuse restriction on free PaaS tiers. Booking/cancellation
+# still work fully; this just means no real email goes out. Swap the body of
+# send_email() for an HTTP-based provider (Resend, SendGrid, etc.) to restore
+# real delivery — those work here since they're plain HTTPS calls, not SMTP.
 
 
 def send_email(to_email: str, subject: str, body: str) -> None:
-    smtp_host = os.getenv("SMTP_HOST")
-    smtp_port = int(os.getenv("SMTP_PORT", "587"))
-    smtp_user = os.getenv("SMTP_USER")
-    smtp_password = os.getenv("SMTP_PASSWORD")
-    smtp_from = os.getenv("SMTP_FROM", smtp_user)
-
-    message = MIMEText(body)
-    message["Subject"] = subject
-    message["From"] = smtp_from
-    message["To"] = to_email
-
-    socket.getaddrinfo = _ipv4_only_getaddrinfo
-    try:
-        with smtplib.SMTP(smtp_host, smtp_port, timeout=15) as server:
-            server.starttls()
-            server.login(smtp_user, smtp_password)
-            server.sendmail(smtp_from, [to_email], message.as_string())
-    finally:
-        socket.getaddrinfo = _original_getaddrinfo
+    print(f"[email disabled — see email_utils.py] Would have sent to {to_email}: {subject}")
 
 
 def send_confirmation_email(to_email: str, patient_name: str, doctor_name: str, appt_date: str, appt_time: str) -> None:
