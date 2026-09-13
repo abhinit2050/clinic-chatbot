@@ -66,6 +66,30 @@ def trigger_reminders():
     return {"sent": sent}
 
 
+@app.get("/admin/test-smtp")
+def test_smtp():
+    """Temporary diagnostic: raw TCP connect (no SMTP handshake) from inside
+    this container to the configured SMTP host on the common SMTP ports.
+    Distinguishes "the platform blocks this port outbound" (timeout/refused
+    here too) from "something's wrong further up the SMTP protocol" (this
+    endpoint succeeds, but real emails still fail) — remove once the hosting
+    platform's SMTP situation is sorted out."""
+    import socket
+    import time
+
+    smtp_host = os.getenv("SMTP_HOST")
+    configured_port = int(os.getenv("SMTP_PORT", "587"))
+    results = {}
+    for port in sorted({25, 465, 587, configured_port}):
+        start = time.monotonic()
+        try:
+            with socket.create_connection((smtp_host, port), timeout=5):
+                results[port] = {"success": True, "elapsed_s": round(time.monotonic() - start, 2)}
+        except Exception as e:
+            results[port] = {"success": False, "elapsed_s": round(time.monotonic() - start, 2), "error": str(e)}
+    return {"smtp_host": smtp_host, "results": results}
+
+
 # Serves the built React app (see Dockerfile) so the whole thing runs as one
 # Cloud Run service. Mounted last so it doesn't shadow the API routes above —
 # StaticFiles(html=True) falls back to index.html for unmatched paths.
