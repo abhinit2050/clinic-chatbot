@@ -8,7 +8,20 @@
 # focused on *when* to send an email, not *how*.
 import os
 import smtplib
+import socket
 from email.mime.text import MIMEText
+
+_original_getaddrinfo = socket.getaddrinfo
+
+
+def _ipv4_only_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+    # Some hosts (Render's outbound network, notably) have no working IPv6
+    # route, but Gmail's SMTP server publishes both A and AAAA records —
+    # smtplib can pick the IPv6 address first and fail immediately with
+    # "Network is unreachable" instead of falling back to IPv4. Restricting
+    # resolution to AF_INET for the duration of the SMTP connection sidesteps
+    # that, without touching the hostname smtplib uses for TLS verification.
+    return _original_getaddrinfo(host, port, socket.AF_INET, type, proto, flags)
 
 
 def send_email(to_email: str, subject: str, body: str) -> None:
@@ -23,10 +36,14 @@ def send_email(to_email: str, subject: str, body: str) -> None:
     message["From"] = smtp_from
     message["To"] = to_email
 
-    with smtplib.SMTP(smtp_host, smtp_port) as server:
-        server.starttls()
-        server.login(smtp_user, smtp_password)
-        server.sendmail(smtp_from, [to_email], message.as_string())
+    socket.getaddrinfo = _ipv4_only_getaddrinfo
+    try:
+        with smtplib.SMTP(smtp_host, smtp_port, timeout=15) as server:
+            server.starttls()
+            server.login(smtp_user, smtp_password)
+            server.sendmail(smtp_from, [to_email], message.as_string())
+    finally:
+        socket.getaddrinfo = _original_getaddrinfo
 
 
 def send_confirmation_email(to_email: str, patient_name: str, doctor_name: str, appt_date: str, appt_time: str) -> None:
