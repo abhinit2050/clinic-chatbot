@@ -1,0 +1,79 @@
+.booking-confirmation {
+    align-self: flex-start;
+    max-width: 80%;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 16px 18px;
+    background-color: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--border-radius);
+    box-shadow: var(--shadow-sm);
+    animation: bubble-in 0.2s ease-out;
+}
+
+.booking-confirmation-title {
+    font-weight: 600;
+    font-size: var(--font-md);
+    color: var(--color-text);
+    margin-bottom: 2px;
+}
+
+.booking-confirmation-details {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 4px 12px;
+    margin: 0;
+}
+
+.booking-confirmation-details dt {
+    font-size: var(--font-sm);
+    color: var(--color-text-muted);
+}
+
+.booking-confirmation-details dd {
+    margin: 0;
+    font-size: var(--font-sm);
+    color: var(--color-text);
+    font-weight: 500;
+}
+
+.booking-confirmation-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 4px;
+}
+
+.booking-confirmation-actions button {
+    padding: 10px 16px;
+    border: none;
+    border-radius: calc(var(--border-radius) - 4px);
+    font-size: var(--font-md);
+    font-weight: 500;
+    cursor: pointer;
+    transition: background-color 0.15s ease;
+}
+
+.booking-confirmation-yes {
+    background-color: var(--color-primary);
+    color: #ffffff;
+}
+
+.booking-confirmation-yes:hover:not(:disabled) {
+    background-color: var(--color-primary-hover);
+}
+
+.booking-confirmation-cancel {
+    background-color: transparent;
+    color: var(--color-text);
+    border: 1px solid var(--color-border) !important;
+}
+
+.booking-confirmation-cancel:hover:not(:disabled) {
+    background-color: var(--color-bg);
+}
+
+.booking-confirmation-actions button:disabled {
+    opacity: 0.6;
+    cursor: default;
+}

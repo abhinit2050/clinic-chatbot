@@ -33,6 +33,7 @@ from tools import (
     book_appointment,
     cancel_appointment,
     check_availability,
+    confirm_booking_details,
     list_appointments,
     list_doctors,
     request_patient_details,
@@ -40,13 +41,23 @@ from tools import (
 
 load_dotenv()
 
-TOOLS = [list_doctors, check_availability, book_appointment, list_appointments, cancel_appointment, request_patient_details]
+TOOLS = [
+    list_doctors,
+    check_availability,
+    confirm_booking_details,
+    book_appointment,
+    list_appointments,
+    cancel_appointment,
+    request_patient_details,
+]
 TERMINAL_TOOLS = {"book_appointment", "cancel_appointment"}
-# request_patient_details isn't a "terminal" action (nothing in the DB
-# changes) — it's a UI signal, tracked separately from terminal_action_pending
-# so the frontend can tell "show a form now" apart from "a booking just
-# completed, wrap up the session."
+# request_patient_details and confirm_booking_details aren't "terminal"
+# actions (nothing in the DB changes) — they're UI signals, tracked
+# separately from terminal_action_pending so the frontend can tell "show a
+# form/summary now" apart from "a booking just completed, wrap up the
+# session."
 FORM_REQUEST_TOOL = "request_patient_details"
+BOOKING_CONFIRM_TOOL = "confirm_booking_details"
 
 llm = ChatOpenAI(model="gpt-4o", api_key=os.getenv("OPENAI_API_KEY"))
 llm_with_tools = llm.bind_tools(TOOLS)
@@ -68,6 +79,14 @@ class ChatState(MessagesState):
     # form now" instead of relying on the frontend to guess from the message
     # text, which would be fragile (breaks the moment the wording changes).
     awaiting_patient_form: bool
+    # Same idea, for the Yes/Cancel confirm_booking_details step — set once
+    # the model has all the details and wants the patient to explicitly
+    # approve them before anything is booked.
+    awaiting_booking_confirmation: bool
+    # The exact doctor/slot/patient fields confirm_booking_details echoed
+    # back, so the frontend can render the summary card without re-parsing
+    # it out of the model's prose reply.
+    booking_confirmation: dict | None
 
 
 def agent_node(state: ChatState) -> dict:
@@ -80,8 +99,9 @@ def agent_node(state: ChatState) -> dict:
     You have access to the following tools:
     - list_doctors: use this when the user asks about available doctors
     - check_availability: use this when the user has chosen a doctor and a date
-    - request_patient_details: call this once the doctor, date, and time slot are all confirmed, instead of asking the patient to type their name/phone/email in chat — a form will be shown to them for that. Keep your accompanying message short (e.g. "Great, just need a few details from you.").
-    - book_appointment: use this once the form (via request_patient_details) has returned the patient's name and phone number. Email is optional but nice to collect (it enables appointment reminder emails). If the patient mentioned any symptoms or a reason for the visit earlier in the conversation, you MUST pass it as the `reason` argument — don't drop it just because they haven't repeated it right before booking.
+    - request_patient_details: the ONLY way to collect the patient's name/phone/email — it shows them a form, there is no other input channel for it. RULE: the instant the patient confirms a specific doctor + date + time slot, your entire response for that turn must be a call to this tool — not a text reply. If your response would contain words like "details", "name", "phone", or "few things I need", that is a sign you must be calling this tool instead of writing that sentence. A text-only reply that talks about needing details without calling this tool is always wrong and leaves the patient stuck with nothing to click.
+    - confirm_booking_details: call this once you have ALL of doctor, date, time slot, AND the patient's name + phone (from request_patient_details) — pass every one of those exact values. This shows the patient a summary card with Yes/Cancel buttons; it does not book anything. Do NOT call book_appointment in the same turn as this — wait for the patient's next message.
+    - book_appointment: call this ONLY in the turn right after the patient has replied to a confirm_booking_details summary by clicking Yes. Use the exact same doctor/slot/name/phone/email you just showed them in confirm_booking_details — do not change or re-derive them. If they clicked Cancel or asked to change something instead, do not call this — go back to confirm_booking_details with the corrected values once you have them. Email is optional but nice to collect (it enables appointment reminder emails). If the patient mentioned any symptoms or a reason for the visit earlier in the conversation, you MUST pass it as the `reason` argument — don't drop it just because they haven't repeated it right before booking.
     - list_appointments: use this when the user wants to see, or cancel, their existing appointments. Ask for their phone number or email to look them up — whichever they find easier to give, either one is enough.
     - cancel_appointment: use this only after list_appointments has shown the patient their appointments and they've confirmed which one to cancel. Never guess an appointment id.
     - Always use the exact doctor id, slot id, and appointment id returned by the tools. Never guess or make up ids.
@@ -98,14 +118,22 @@ tools_node = ToolNode(TOOLS)
 
 
 def check_signals_node(state: ChatState) -> dict:
-    """Looks at the tool results the agent node's last tool call(s) just produced, and raises two independent flags for the rest of the graph (and eventually the frontend) to react to: did a booking/cancellation just succeed (terminal_action_pending — triggers summarize), and did the model just ask to show the patient-details form (awaiting_patient_form)."""
+    """Looks at the tool results the agent node's last tool call(s) just produced, and raises flags for the rest of the graph (and eventually the frontend) to react to: did a booking/cancellation just succeed (terminal_action_pending — triggers summarize), did the model just ask to show the patient-details form (awaiting_patient_form), and did it just ask for Yes/Cancel confirmation on a booking summary (awaiting_booking_confirmation)."""
     terminal_action_pending = False
     awaiting_patient_form = False
+    awaiting_booking_confirmation = False
+    booking_confirmation = None
     for message in reversed(state["messages"]):
         if not isinstance(message, ToolMessage):
             break
         if message.name == FORM_REQUEST_TOOL:
             awaiting_patient_form = True
+        if message.name == BOOKING_CONFIRM_TOOL:
+            try:
+                booking_confirmation = json.loads(message.content)
+            except (json.JSONDecodeError, TypeError):
+                booking_confirmation = None
+            awaiting_booking_confirmation = booking_confirmation is not None
         if message.name in TERMINAL_TOOLS:
             try:
                 result = json.loads(message.content)
@@ -113,7 +141,12 @@ def check_signals_node(state: ChatState) -> dict:
                 result = {}
             if result.get("success"):
                 terminal_action_pending = True
-    return {"terminal_action_pending": terminal_action_pending, "awaiting_patient_form": awaiting_patient_form}
+    return {
+        "terminal_action_pending": terminal_action_pending,
+        "awaiting_patient_form": awaiting_patient_form,
+        "awaiting_booking_confirmation": awaiting_booking_confirmation,
+        "booking_confirmation": booking_confirmation,
+    }
 
 
 def summarize_node(state: ChatState) -> dict:
@@ -134,6 +167,8 @@ def summarize_node(state: ChatState) -> dict:
         "messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES), AIMessage(content=summary_response.content)],
         "terminal_action_pending": False,
         "awaiting_patient_form": False,
+        "awaiting_booking_confirmation": False,
+        "booking_confirmation": None,
     }
 
 

@@ -3,13 +3,29 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from chat_router import router
-from database import create_tables
+from database import create_tables, get_connection
 from reminders import send_due_reminders
 
 create_tables()
+
+
+def seed_if_empty():
+    """Demo deploys start from a fresh, empty SQLite file every time the
+    container restarts (Cloud Run's filesystem is ephemeral) — reseed so the
+    doctors/slots/patients data the chatbot demos against always exists."""
+    conn = get_connection()
+    is_empty = conn.execute("SELECT COUNT(*) FROM doctors").fetchone()[0] == 0
+    conn.close()
+    if is_empty:
+        from seed import seed
+        seed()
+
+
+seed_if_empty()
 
 # BackgroundScheduler runs its jobs on their own thread(s), separate from the
 # FastAPI request/response cycle — the reminder job fires on a timer whether
@@ -48,3 +64,11 @@ def trigger_reminders():
     behind an admin auth check before shipping anywhere real."""
     sent = send_due_reminders()
     return {"sent": sent}
+
+
+# Serves the built React app (see Dockerfile) so the whole thing runs as one
+# Cloud Run service. Mounted last so it doesn't shadow the API routes above —
+# StaticFiles(html=True) falls back to index.html for unmatched paths.
+_static_dir = os.path.join(os.path.dirname(__file__), "static")
+if os.path.isdir(_static_dir):
+    app.mount("/", StaticFiles(directory=_static_dir, html=True), name="static")

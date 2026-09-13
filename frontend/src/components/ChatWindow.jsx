@@ -1,14 +1,24 @@
 import { useRef, useEffect } from "react";
 import PatientDetailsForm from "./PatientDetailsForm";
+import BookingConfirmation from "./BookingConfirmation";
 import "./ChatWindow.css";
 
-function ChatWindow({ conversationHistory, isTyping, awaitingPatientForm, onFormSubmit }) {
+function ChatWindow({
+    conversationHistory,
+    isTyping,
+    awaitingPatientForm,
+    onFormSubmit,
+    awaitingBookingConfirmation,
+    bookingConfirmation,
+    onBookingConfirm,
+    onBookingCancel,
+}) {
 
     const bottomref = useRef(null);
 
     useEffect(() => {
         bottomref.current?.scrollIntoView({ behavior: "smooth" });
-    }, [conversationHistory, isTyping, awaitingPatientForm]);
+    }, [conversationHistory, isTyping, awaitingPatientForm, awaitingBookingConfirmation]);
 
     return (
         <div className="chat-window">
@@ -36,6 +46,14 @@ function ChatWindow({ conversationHistory, isTyping, awaitingPatientForm, onForm
 
             {!isTyping && awaitingPatientForm && (
                 <PatientDetailsForm onSubmit={onFormSubmit} />
+            )}
+
+            {!isTyping && awaitingBookingConfirmation && bookingConfirmation && (
+                <BookingConfirmation
+                    details={bookingConfirmation}
+                    onConfirm={onBookingConfirm}
+                    onCancel={onBookingCancel}
+                />
             )}
 
             <div ref={bottomref}></div>

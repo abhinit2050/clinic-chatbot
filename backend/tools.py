@@ -7,11 +7,21 @@
 # These are plain Python functions underneath (still hit SQLite directly via
 # database.get_connection(), exactly like before) — @tool just wraps them so
 # LangGraph's ToolNode can call them uniformly.
+import json
 import sqlite3
+from typing import Annotated
 
 from database import get_connection
 from email_utils import send_confirmation_email
+from langchain_core.messages import HumanMessage, ToolMessage
 from langchain_core.tools import tool
+from langgraph.prebuilt import InjectedState
+
+# Sent verbatim by the frontend's Yes button (see BookingConfirmation.jsx) —
+# never typed by a real user, so matching this exact string is a reliable
+# signal that the patient clicked "Yes" on the specific summary they were
+# shown, not just that some message happened to follow a tool call.
+BOOKING_CONFIRM_PHRASE = "Yes, please confirm the booking."
 
 
 @tool
@@ -46,6 +56,66 @@ def check_availability(doctor_id: int, date: str) -> list[dict]:
     return results
 
 
+def _get_confirmed_booking(messages: list) -> dict | None:
+    """Returns the exact booking details the patient explicitly approved via
+    the confirm_booking_details summary + Yes button — or None if there
+    isn't a live confirmation right now.
+
+    This walks the whole thread forward, tracking the most recent
+    confirm_booking_details result. That "pending" summary only turns into a
+    real confirmation if the very next human message is the Yes button's
+    exact phrase (see BOOKING_CONFIRM_PHRASE) — any other reply (Cancel, a
+    correction, small talk) clears it. Scoping it to "immediately next
+    message" (not "any message, ever, after any confirm call") is what stops
+    a confirmation from one attempt earlier in the thread — or from a
+    completely different doctor/slot/name — from silently authorizing a
+    later, different booking.
+    """
+    pending = None
+    for message in messages:
+        if isinstance(message, ToolMessage) and message.name == "confirm_booking_details":
+            try:
+                pending = json.loads(message.content)
+            except (json.JSONDecodeError, TypeError):
+                pending = None
+        elif isinstance(message, HumanMessage):
+            if pending is not None and message.content.strip() == BOOKING_CONFIRM_PHRASE:
+                return pending
+            pending = None
+    return None
+
+
+@tool
+def confirm_booking_details(
+    doctor_id: int,
+    doctor_name: str,
+    slot_id: int,
+    date: str,
+    time: str,
+    name: str,
+    phone: str,
+    email: str | None = None,
+    reason: str = "",
+) -> dict:
+    """Call this once you have ALL of: doctor, date, time slot, and the patient's name + phone (email optional, from request_patient_details). This shows the patient a summary card with Yes/Cancel buttons — it does NOT book anything by itself. Wait for their reply: only call book_appointment, with these exact same values, after they click Yes. If they click Cancel or want to change something, help them fix it and call this again with the corrected values — never call book_appointment without a fresh Yes on the current details."""
+    # Echoing every field back (not just {"success": True}) is what lets
+    # book_appointment later verify its own arguments against what the
+    # patient actually saw and approved, and lets the frontend render the
+    # summary card without re-deriving it from prose.
+    return {
+        "success": True,
+        "doctor_id": doctor_id,
+        "doctor_name": doctor_name,
+        "slot_id": slot_id,
+        "date": date,
+        "time": time,
+        "name": name,
+        "phone": phone,
+        "email": email,
+        "reason": reason,
+    }
+
+
 @tool
 def book_appointment(
     doctor_id: int,
@@ -55,8 +125,21 @@ def book_appointment(
     date: str,
     reason: str = "",
     email: str | None = None,
+    state: Annotated[dict, InjectedState] = None,
 ) -> dict:
     """Book an appointment for a patient on a confirmed doctor/slot/date. Creates the patient record if they're new."""
+    confirmed = _get_confirmed_booking((state or {}).get("messages", []))
+    if not confirmed or (confirmed["doctor_id"], confirmed["slot_id"], confirmed["name"], confirmed["phone"]) != (
+        doctor_id,
+        slot_id,
+        name,
+        phone,
+    ):
+        return {
+            "success": False,
+            "message": "These exact details haven't been shown to and confirmed by the patient yet. Call confirm_booking_details with these values and wait for a Yes before booking — never invent or reuse patient details.",
+        }
+
     conn = get_connection()
     cursor = conn.cursor()
 
