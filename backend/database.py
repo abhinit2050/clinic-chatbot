@@ -1,74 +1,61 @@
-# App-data schema (doctors/slots/patients/appointments) for the clinic itself.
+# App-data store (doctors/slots/patients/appointments) for the clinic itself.
 # This is deliberately separate from checkpoints.db (see graph.py), which holds
-# conversation/session state managed by LangGraph — two different concerns, two DBs.
+# conversation/session state managed by LangGraph — two different concerns, two
+# different stores (this one's MongoDB, checkpoints.db stays SQLite since
+# losing in-progress chat history on a restart is low-stakes, unlike losing an
+# actual booking). The previous SQLite version of this file is kept as
+# database2.py for reference.
 #
-# Schema changes here use plain `ALTER`/`CREATE IF NOT EXISTS`, not a migration
-# framework (e.g. Alembic). That's a fine tradeoff for a demo project where
-# clinic.db is throwaway, reseedable data (see seed.py) with no real patients —
-# in a real production system you'd want versioned migrations instead of relying
-# on "just delete the DB and recreate it".
-import sqlite3
+# Documents keep a plain integer `id` field (via next_id() below) instead of
+# using Mongo's own ObjectId as the primary key — the tool functions in
+# tools.py (and the system prompt in graph.py) already treat doctor/slot/
+# appointment ids as plain ints the model echoes back verbatim; keeping that
+# contract avoids having to touch every tool signature and the prompt just to
+# switch storage engines.
+import os
 
-DB_PATH = "clinic.db"
+from pymongo import MongoClient, ReturnDocument
 
-def get_connection():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+_client = None
 
-def create_tables():
-    conn = get_connection()
-    cursor = conn.cursor()
 
-    cursor.execute(""" 
-        CREATE TABLE IF NOT EXISTS doctors (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            specialty TEXT NOT NULL
-        )
-    """)
+def get_client():
+    global _client
+    if _client is None:
+        _client = MongoClient(os.getenv("MONGODB_URI"))
+    return _client
 
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS slots (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            doctor_id INTEGER NOT NULL,
-            date TEXT NOT NULL,
-            time TEXT NOT NULL,
-            is_booked INTEGER DEFAULT 0,
-            FOREIGN KEY (doctor_id) REFERENCES doctors(id)
-        )
-    """)
 
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS patients (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            phone TEXT NOT NULL UNIQUE,
-            email TEXT UNIQUE
-        )
-    """)
-    # Note: SQLite treats every NULL as distinct from every other NULL, even
-    # under UNIQUE — so any number of patients can still have no email on
-    # file. The constraint only fires if two *different* patients (different
-    # phone numbers) end up with the same non-null email. See tools.py's
-    # book_appointment for how that collision is handled gracefully.
+def get_db():
+    return get_client()["clinic"]
 
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS appointments (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            slot_id INTEGER NOT NULL,
-            patient_id INTEGER NOT NULL,
-            reason TEXT,
-            status TEXT NOT NULL DEFAULT 'booked',
-            reminder_sent INTEGER NOT NULL DEFAULT 0,
-            FOREIGN KEY (slot_id) REFERENCES slots(id),
-            FOREIGN KEY (patient_id) REFERENCES patients(id)
-        )
-    """)
 
-    conn.commit()
-    conn.close()
+def create_indexes():
+    db = get_db()
+    db.patients.create_index("phone", unique=True)
+    # Partial index (only applies where email is an actual string) mirrors
+    # SQLite's old behavior: any number of patients can have no email on
+    # file, but two different patients can't share one.
+    db.patients.create_index(
+        "email",
+        unique=True,
+        partialFilterExpression={"email": {"$type": "string"}},
+    )
+    db.doctors.create_index("id", unique=True)
+    db.slots.create_index("id", unique=True)
+    db.appointments.create_index("id", unique=True)
 
-if __name__ == "__main__":
-    create_tables()
-    print("Tables created successfully!")
+
+def next_id(counter_name: str) -> int:
+    """Atomically hands out the next integer id for a collection (doctors,
+    slots, patients, appointments), via a single shared counters collection.
+    $inc on find_one_and_update is atomic even under concurrent callers,
+    which a plain "read max id, add 1" approach would not be."""
+    db = get_db()
+    doc = db.counters.find_one_and_update(
+        {"_id": counter_name},
+        {"$inc": {"seq": 1}},
+        upsert=True,
+        return_document=ReturnDocument.AFTER,
+    )
+    return doc["seq"]

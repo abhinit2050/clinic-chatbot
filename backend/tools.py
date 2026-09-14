@@ -4,18 +4,18 @@
 # information that used to be hand-duplicated in tool_definitions.py. One source
 # of truth instead of two things that can drift apart.
 #
-# These are plain Python functions underneath (still hit SQLite directly via
-# database.get_connection(), exactly like before) — @tool just wraps them so
-# LangGraph's ToolNode can call them uniformly.
+# These are plain Python functions underneath (hit MongoDB via database.get_db(),
+# see database.py) — @tool just wraps them so LangGraph's ToolNode can call
+# them uniformly.
 import json
-import sqlite3
 from typing import Annotated
 
-from database import get_connection
+from database import get_db, next_id
 from email_utils import send_confirmation_email
 from langchain_core.messages import HumanMessage, ToolMessage
 from langchain_core.tools import tool
 from langgraph.prebuilt import InjectedState
+from pymongo.errors import DuplicateKeyError
 
 # Sent verbatim by the frontend's Yes button (see BookingConfirmation.jsx) —
 # never typed by a real user, so matching this exact string is a reliable
@@ -27,33 +27,36 @@ BOOKING_CONFIRM_PHRASE = "Yes, please confirm the booking."
 @tool
 def list_doctors() -> list[dict]:
     """Return all available doctors with their id, name and specialty."""
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("SELECT * FROM doctors")
-    doctors = cursor.fetchall()
-    conn.close()
-    return [{"id": row["id"], "name": row["name"], "specialty": row["specialty"]} for row in doctors]
+    db = get_db()
+    return [
+        {"id": doc["id"], "name": doc["name"], "specialty": doc["specialty"]}
+        for doc in db.doctors.find({}, {"_id": 0})
+    ]
 
 
 @tool
 def check_availability(doctor_id: int, date: str) -> list[dict]:
     """Check available (unbooked) time slots for a doctor on a given date (YYYY-MM-DD)."""
-    conn = get_connection()
-    cursor = conn.cursor()
+    db = get_db()
+    slots = db.slots.find({"doctor_id": doctor_id, "date": date, "is_booked": False}, {"_id": 0})
+    return [{"slot_id": slot["id"], "time": slot["time"]} for slot in slots]
 
-    cursor.execute("""
-        SELECT id, time from slots WHERE doctor_id=? AND date=? AND is_booked=0
-    """, (doctor_id, date))
 
-    slots = cursor.fetchall()
-    conn.close()
-
-    results = []
-    for row in slots:
-        results.append({"slot_id": row["id"], "time": row["time"]})
-
-    return results
+def _find_patient(db, phone: str | None, email: str | None):
+    """Same "either field alone identifies the patient" matching used by
+    book_appointment and list_appointments. Built as an explicit $or over
+    only the fields actually provided, rather than always including both —
+    passing a bare {"email": None} would match documents where email is
+    literally null, unlike SQLite's `email=?` bind, which never matches on a
+    NULL parameter regardless of the column's value."""
+    conditions = []
+    if phone:
+        conditions.append({"phone": phone})
+    if email:
+        conditions.append({"email": email})
+    if not conditions:
+        return None
+    return db.patients.find_one({"$or": conditions})
 
 
 def _get_confirmed_booking(messages: list) -> dict | None:
@@ -140,55 +143,53 @@ def book_appointment(
             "message": "These exact details haven't been shown to and confirmed by the patient yet. Call confirm_booking_details with these values and wait for a Yes before booking — never invent or reuse patient details.",
         }
 
-    conn = get_connection()
-    cursor = conn.cursor()
+    db = get_db()
 
     # Match on phone OR email, not phone alone — both are unique identifiers
     # for a patient now (see database.py), so a returning patient should be
     # recognized even if they give the email they registered with under a
-    # different phone number, or vice versa. (SQLite's `email=?` bind never
-    # matches when email is None/empty, so this safely degrades to a
-    # phone-only lookup when no email is given, no special-casing needed.)
-    cursor.execute("SELECT * from patients WHERE phone=? OR email=?", (phone, email))
-    patient = cursor.fetchone()
+    # different phone number, or vice versa.
+    patient = _find_patient(db, phone, email)
 
     if not patient:
+        patient_id = next_id("patients")
         try:
-            cursor.execute("INSERT INTO patients (name, phone, email) VALUES (?,?,?)", (name, phone, email))
+            db.patients.insert_one({"id": patient_id, "name": name, "phone": phone, "email": email})
             effective_email = email
-        except sqlite3.IntegrityError:
-            # patients.email is UNIQUE (see database.py) — this fires if a
-            # *different* patient already used this exact email. Rather than
-            # fail the whole booking over an email collision, book them
+        except DuplicateKeyError:
+            # patients.email has a unique index (see database.py) — this fires
+            # if a *different* patient already used this exact email. Rather
+            # than fail the whole booking over an email collision, book them
             # without an email on file (no reminder for this patient, but the
             # appointment itself still goes through).
-            cursor.execute("INSERT INTO patients (name, phone, email) VALUES (?,?,NULL)", (name, phone))
+            db.patients.insert_one({"id": patient_id, "name": name, "phone": phone, "email": None})
             effective_email = None
-        patient_id = cursor.lastrowid
     else:
         patient_id = patient["id"]
-        effective_email = patient["email"] or email
+        effective_email = patient.get("email") or email
         # Backfill email for a returning patient who didn't have one on file yet —
         # without touching an email they'd already given us on a previous visit.
-        if email and not patient["email"]:
+        if email and not patient.get("email"):
             try:
-                cursor.execute("UPDATE patients SET email=? WHERE id=?", (email, patient_id))
-            except sqlite3.IntegrityError:
+                db.patients.update_one({"id": patient_id}, {"$set": {"email": email}})
+            except DuplicateKeyError:
                 effective_email = None
 
-    cursor.execute("UPDATE slots SET is_booked=1 WHERE id=?", (slot_id,))
-    cursor.execute(
-        "INSERT INTO appointments (slot_id, patient_id, reason, status) VALUES (?,?,?,'booked')",
-        (slot_id, patient_id, reason),
+    db.slots.update_one({"id": slot_id}, {"$set": {"is_booked": True}})
+    appointment_id = next_id("appointments")
+    db.appointments.insert_one(
+        {
+            "id": appointment_id,
+            "slot_id": slot_id,
+            "patient_id": patient_id,
+            "reason": reason,
+            "status": "booked",
+            "reminder_sent": False,
+        }
     )
 
-    cursor.execute("SELECT name FROM doctors WHERE id=?", (doctor_id,))
-    doctor = cursor.fetchone()
-    cursor.execute("SELECT time FROM slots WHERE id=?", (slot_id,))
-    slot = cursor.fetchone()
-
-    conn.commit()
-    conn.close()
+    doctor = db.doctors.find_one({"id": doctor_id})
+    slot = db.slots.find_one({"id": slot_id})
 
     # Booking confirmation fires here, synchronously, as a direct side effect
     # of the booking succeeding — unlike the reminder email (reminders.py),
@@ -207,44 +208,33 @@ def book_appointment(
 @tool
 def list_appointments(phone: str | None = None, email: str | None = None) -> dict:
     """List a patient's upcoming, non-cancelled appointments. Look them up by phone number, email, or both — either one alone is enough to find their record."""
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    # Same phone-OR-email matching as book_appointment, for the same reason:
-    # either field alone uniquely identifies the patient.
-    cursor.execute("SELECT id FROM patients WHERE phone=? OR email=?", (phone, email))
-    patient = cursor.fetchone()
+    db = get_db()
+    patient = _find_patient(db, phone, email)
 
     if not patient:
-        conn.close()
         # Distinguished from "found but nothing upcoming" below — the LLM needs
         # to react differently to each case (e.g. ask the patient to double-check
         # the number, vs. tell them they have no appointments booked).
         return {"patient_found": False, "appointments": []}
 
-    cursor.execute("""
-        SELECT a.id AS appointment_id, d.name AS doctor_name, d.specialty,
-               s.date, s.time, a.reason
-        FROM appointments a
-        JOIN slots s ON a.slot_id = s.id
-        JOIN doctors d ON s.doctor_id = d.id
-        WHERE a.patient_id = ? AND a.status = 'booked'
-        ORDER BY s.date, s.time
-    """, (patient["id"],))
-    rows = cursor.fetchall()
-    conn.close()
-
-    appointments = [
-        {
-            "appointment_id": row["appointment_id"],
-            "doctor_name": row["doctor_name"],
-            "specialty": row["specialty"],
-            "date": row["date"],
-            "time": row["time"],
-            "reason": row["reason"],
-        }
-        for row in rows
-    ]
+    # No JOIN in MongoDB — a demo's worth of appointments per patient is tiny,
+    # so a straightforward per-appointment lookup of its slot/doctor is far
+    # more readable than an aggregation $lookup pipeline for the same result.
+    appointments = []
+    for appt in db.appointments.find({"patient_id": patient["id"], "status": "booked"}):
+        slot = db.slots.find_one({"id": appt["slot_id"]})
+        doctor = db.doctors.find_one({"id": slot["doctor_id"]})
+        appointments.append(
+            {
+                "appointment_id": appt["id"],
+                "doctor_name": doctor["name"],
+                "specialty": doctor["specialty"],
+                "date": slot["date"],
+                "time": slot["time"],
+                "reason": appt.get("reason"),
+            }
+        )
+    appointments.sort(key=lambda a: (a["date"], a["time"]))
     return {"patient_found": True, "appointments": appointments}
 
 
@@ -264,23 +254,16 @@ def request_patient_details() -> dict:
 @tool
 def cancel_appointment(appointment_id: int) -> dict:
     """Cancel a booked appointment by its id, freeing the associated time slot back up."""
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("SELECT * FROM appointments WHERE id=?", (appointment_id,))
-    appointment = cursor.fetchone()
+    db = get_db()
+    appointment = db.appointments.find_one({"id": appointment_id})
 
     if not appointment:
-        conn.close()
         return {"success": False, "message": "Appointment not found."}
 
     if appointment["status"] == "cancelled":
-        conn.close()
         return {"success": False, "message": "This appointment is already cancelled."}
 
-    cursor.execute("UPDATE appointments SET status='cancelled' WHERE id=?", (appointment_id,))
-    cursor.execute("UPDATE slots SET is_booked=0 WHERE id=?", (appointment["slot_id"],))
-    conn.commit()
-    conn.close()
+    db.appointments.update_one({"id": appointment_id}, {"$set": {"status": "cancelled"}})
+    db.slots.update_one({"id": appointment["slot_id"]}, {"$set": {"is_booked": False}})
 
     return {"success": True, "message": "Appointment cancelled successfully."}

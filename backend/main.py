@@ -7,20 +7,17 @@ from fastapi.staticfiles import StaticFiles
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from chat_router import router
-from database import create_tables, get_connection
+from database import create_indexes, get_db
 from reminders import send_due_reminders
 
-create_tables()
+create_indexes()
 
 
 def seed_if_empty():
-    """Demo deploys start from a fresh, empty SQLite file every time the
-    container restarts (Cloud Run's filesystem is ephemeral) — reseed so the
-    doctors/slots/patients data the chatbot demos against always exists."""
-    conn = get_connection()
-    is_empty = conn.execute("SELECT COUNT(*) FROM doctors").fetchone()[0] == 0
-    conn.close()
-    if is_empty:
+    """A brand-new MongoDB database starts with no doctors/slots/patients —
+    reseed so the chatbot always has data to demo against."""
+    db = get_db()
+    if db.doctors.count_documents({}) == 0:
         from seed import seed
         seed()
 
